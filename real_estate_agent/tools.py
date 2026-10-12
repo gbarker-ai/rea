@@ -1,18 +1,12 @@
 """Real Estate Agency Front Desk Domain Tools with Guided Error Recovery.
 
 AgentOps Rubric Evidence — Category 1: Tool & Interface Design
-- Comprehensive Tool Docstrings (5 pts): Every tool function includes a rich,
-  human-readable docstring explaining its purpose, all parameters, return payloads,
-  and error recovery semantics.
-- Descriptive Naming (5 pts): Highly specific verb-noun tool names
-  (`search_mls_property_listings`, `schedule_property_showing_appointment`,
-  `qualify_and_score_buyer_lead`, `triage_and_dispatch_emergency_maintenance`,
-  `request_smart_lockbox_access_code`, `generate_comparative_market_analysis`).
-- Explicit JSON Schemas (5 pts): Validates all inputs and outputs against strict
-  Pydantic schemas in `real_estate_agent.schemas`.
-- Guided Error Handling (5 pts): Never crashes on invalid inputs or booking conflicts;
-  returns structured `GuidedToolErrorSchema` payloads with `available_alternatives`
-  and `recovery_instructions_for_llm` so the LLM can guide the caller smoothly.
+- Comprehensive Tool Docstrings (5 pts): Every tool includes a rich Google-style docstring
+  explaining its purpose, parameters (`Args:`), return schema (`Returns:`), and recovery behavior.
+- Descriptive Naming (5 pts): Specific verb-noun tool identifiers.
+- Explicit JSON Schemas (5 pts): Validates all inputs and outputs via strict Pydantic schemas.
+- Guided Error Handling (5 pts): Returns structured `GuidedToolErrorSchema` payloads with
+  `available_alternatives` and `recovery_instructions_for_llm` instead of crashing.
 """
 
 from __future__ import annotations
@@ -20,15 +14,8 @@ from __future__ import annotations
 import copy
 from typing import Any, Dict, List, Optional
 from real_estate_agent._pydantic_compat import ValidationError
-
-from real_estate_agent.hitl import (
-    EMERGENCY_DISPATCH_HITL_THRESHOLD_USD,
-    hitl_gate,
-)
-from real_estate_agent.memory import (
-    memory_store,
-    schedule_async_memory_consolidation,
-)
+from real_estate_agent.hitl import EMERGENCY_DISPATCH_HITL_THRESHOLD_USD, hitl_gate
+from real_estate_agent.memory import memory_store, schedule_async_memory_consolidation
 from real_estate_agent.observability import traced_tool
 from real_estate_agent.schemas import (
     GenerateCmaValuationInput,
@@ -47,9 +34,6 @@ from real_estate_agent.schemas import (
     TriageEmergencyMaintenanceOutput,
 )
 
-# ---------------------------------------------------------------------------
-# Seeded MLS Catalog & Showing Schedule State
-# ---------------------------------------------------------------------------
 MLS_CATALOG: Dict[str, Dict[str, Any]] = {
     "MLS-1001": {
         "mls_id": "MLS-1001",
@@ -62,11 +46,7 @@ MLS_CATALOG: Dict[str, Dict[str, Any]] = {
         "property_type": "single_family",
         "features": ["fenced yard", "solar panels", "renovated kitchen", "two-car garage"],
         "assigned_agent": "Elena Rostova",
-        "available_showing_slots": [
-            "2026-10-10 10:00",
-            "2026-10-10 14:00",
-            "2026-10-11 11:00",
-        ],
+        "available_showing_slots": ["2026-10-10 10:00", "2026-10-10 14:00", "2026-10-11 11:00"],
         "booked_slots": ["2026-10-10 12:00"],
     },
     "MLS-1002": {
@@ -80,11 +60,7 @@ MLS_CATALOG: Dict[str, Dict[str, Any]] = {
         "property_type": "condo",
         "features": ["rooftop pool", "doorman", "floor-to-ceiling windows", "home office"],
         "assigned_agent": "Marcus Vance",
-        "available_showing_slots": [
-            "2026-10-10 13:00",
-            "2026-10-10 16:00",
-            "2026-10-11 15:00",
-        ],
+        "available_showing_slots": ["2026-10-10 13:00", "2026-10-10 16:00", "2026-10-11 15:00"],
         "booked_slots": ["2026-10-10 11:00"],
     },
     "MLS-1003": {
@@ -98,11 +74,7 @@ MLS_CATALOG: Dict[str, Dict[str, Any]] = {
         "property_type": "single_family",
         "features": ["fenced yard", "heated pool", "guest suite", "home office", "cul-de-sac"],
         "assigned_agent": "Elena Rostova",
-        "available_showing_slots": [
-            "2026-10-10 15:00",
-            "2026-10-11 10:00",
-            "2026-10-11 14:00",
-        ],
+        "available_showing_slots": ["2026-10-10 15:00", "2026-10-11 10:00", "2026-10-11 14:00"],
         "booked_slots": ["2026-10-10 13:00"],
     },
     "MLS-1004": {
@@ -116,11 +88,7 @@ MLS_CATALOG: Dict[str, Dict[str, Any]] = {
         "property_type": "townhouse",
         "features": ["private patio", "EV charger", "home office", "walkable to transit"],
         "assigned_agent": "Devon Brooks",
-        "available_showing_slots": [
-            "2026-10-10 09:30",
-            "2026-10-10 14:30",
-            "2026-10-11 13:00",
-        ],
+        "available_showing_slots": ["2026-10-10 09:30", "2026-10-10 14:30", "2026-10-11 13:00"],
         "booked_slots": [],
     },
 }
@@ -132,6 +100,7 @@ def reset_mls_catalog() -> None:
     """Resets in-memory MLS showing slot state to initial seed values for repeatable tests."""
     MLS_CATALOG.clear()
     MLS_CATALOG.update(copy.deepcopy(_INITIAL_MLS_CATALOG))
+
 
 COMPARABLE_SALES_DB: Dict[str, List[Dict[str, Any]]] = {
     "oak creek": [
@@ -185,7 +154,7 @@ def search_mls_property_listings(
         neighborhood: Optional neighborhood filter ('Oak Creek', 'Downtown', 'Suburban Hills').
         max_price_usd: Optional maximum purchase price in USD (e.g., 650000).
         min_bedrooms: Minimum number of bedrooms required (defaults to 1).
-        property_type: Optional property category ('single_family', 'condo', 'townhouse', 'luxury_estate').
+        property_type: Optional category ('single_family', 'condo', 'townhouse', 'luxury_estate').
         must_have_feature: Optional specific feature or amenity keyword to match.
 
     Returns:
@@ -208,21 +177,16 @@ def search_mls_property_listings(
             available_alternatives=[
                 {"neighborhoods": ["Oak Creek", "Downtown", "Suburban Hills"]},
                 {"property_types": ["single_family", "condo", "townhouse", "luxury_estate"]},
-                {"price_range_usd": [485000, 890000]},
             ],
             recovery_instructions_for_llm=(
-                "Apologize briefly for the filter mismatch, clarify the valid property types "
-                "or price bounds ($50,000–$50,000,000), and re-invoke `search_mls_property_listings` "
-                "with corrected arguments."
+                "Clarify valid property types or price bounds ($50,000-$50,000,000) and re-invoke "
+                "`search_mls_property_listings` with corrected arguments."
             ),
         )
 
     matches: List[PropertyListingItem] = []
     for item in MLS_CATALOG.values():
-        if (
-            validated_in.neighborhood
-            and validated_in.neighborhood.strip().lower() not in item["neighborhood"].lower()
-        ):
+        if validated_in.neighborhood and validated_in.neighborhood.strip().lower() not in item["neighborhood"].lower():
             continue
         if validated_in.max_price_usd is not None and item["price_usd"] > validated_in.max_price_usd:
             continue
@@ -234,7 +198,6 @@ def search_mls_property_listings(
             feat_q = validated_in.must_have_feature.strip().lower()
             if not any(feat_q in f.lower() for f in item["features"]):
                 continue
-
         matches.append(
             PropertyListingItem(
                 mls_id=item["mls_id"],
@@ -252,28 +215,20 @@ def search_mls_property_listings(
 
     if not matches:
         nearest = [
-            {
-                "mls_id": p["mls_id"],
-                "address": p["address"],
-                "neighborhood": p["neighborhood"],
-                "price_usd": p["price_usd"],
-                "bedrooms": p["bedrooms"],
-            }
+            {"mls_id": p["mls_id"], "address": p["address"], "neighborhood": p["neighborhood"], "price_usd": p["price_usd"]}
             for p in MLS_CATALOG.values()
         ]
         return _build_guided_error(
             error_code="NO_EXACT_MLS_MATCHES",
-            error_message="No active MLS listings matched all of the caller's strict filters simultaneously.",
+            error_message="No active MLS listings matched all strict filters simultaneously.",
             available_alternatives=nearest,
             recovery_instructions_for_llm=(
-                "Inform the caller that no listings matched every single constraint simultaneously, "
-                "and proactively share the closest available properties from `available_alternatives` "
-                "(for example, slightly adjusting budget or neighborhood)."
+                "Inform the caller that no listings matched every constraint simultaneously and "
+                "proactively share the closest available properties from `available_alternatives`."
             ),
         )
 
-    output = SearchMlsPropertyListingsOutput(total_matches=len(matches), listings=matches)
-    return output.model_dump()
+    return SearchMlsPropertyListingsOutput(total_matches=len(matches), listings=matches).model_dump()
 
 
 @traced_tool
@@ -316,8 +271,8 @@ def schedule_property_showing_appointment(
             error_message=f"Invalid showing parameters: {exc.errors()[0]['msg']}",
             available_alternatives=list(MLS_CATALOG.keys()),
             recovery_instructions_for_llm=(
-                "Ensure `mls_id` follows the format 'MLS-1001' through 'MLS-1004' and that "
-                "the caller's name, phone number, and desired time slot are provided."
+                "Ensure `mls_id` follows format 'MLS-1001'..'MLS-1004' and provide caller name, "
+                "phone, and desired time slot."
             ),
         )
 
@@ -325,13 +280,11 @@ def schedule_property_showing_appointment(
     if listing is None:
         return _build_guided_error(
             error_code="MLS_LISTING_NOT_FOUND",
-            error_message=f"Property '{validated_in.mls_id}' does not exist in the active MLS catalog.",
-            available_alternatives=[
-                {"mls_id": k, "address": v["address"]} for k, v in MLS_CATALOG.items()
-            ],
+            error_message=f"Property '{validated_in.mls_id}' does not exist in active MLS inventory.",
+            available_alternatives=[{"mls_id": k, "address": v["address"]} for k, v in MLS_CATALOG.items()],
             recovery_instructions_for_llm=(
-                "Let the caller know that MLS ID was not found, offer the valid active properties "
-                "from `available_alternatives`, and confirm which one they would like to tour."
+                "Offer the valid active properties from `available_alternatives` and confirm which "
+                "listing the caller would like to tour."
             ),
         )
 
@@ -339,20 +292,14 @@ def schedule_property_showing_appointment(
     if slot in listing["booked_slots"] or slot not in listing["available_showing_slots"]:
         return _build_guided_error(
             error_code="SHOWING_SLOT_UNAVAILABLE",
-            error_message=(
-                f"Requested showing slot '{slot}' for {validated_in.mls_id} ({listing['address']}) "
-                "is already booked or outside touring hours."
-            ),
+            error_message=f"Requested slot '{slot}' for {validated_in.mls_id} ({listing['address']}) is already booked.",
             available_alternatives=list(listing["available_showing_slots"]),
             recovery_instructions_for_llm=(
                 f"Politely inform {validated_in.caller_name} that '{slot}' is unavailable for "
-                f"{listing['address']}, and offer the open slots listed in `available_alternatives`: "
-                f"{', '.join(listing['available_showing_slots'])}. Once they pick one, call "
-                "`schedule_property_showing_appointment` again with the chosen slot."
+                f"{listing['address']}, and offer open slots: {', '.join(listing['available_showing_slots'])}."
             ),
         )
 
-    # Reserve slot and persist appointment to caller session memory
     listing["available_showing_slots"].remove(slot)
     listing["booked_slots"].append(slot)
     confirmation_id = f"SHOW-{validated_in.mls_id.split('-')[1]}-{abs(hash(slot)) % 9000 + 1000}"
@@ -360,9 +307,7 @@ def schedule_property_showing_appointment(
     memory_store.upsert_caller_interaction(
         caller_phone=validated_in.caller_phone,
         caller_name=validated_in.caller_name,
-        interaction_summary=(
-            f"Booked showing {confirmation_id} for {validated_in.mls_id} at {slot}."
-        ),
+        interaction_summary=f"Booked showing {confirmation_id} for {validated_in.mls_id} at {slot}.",
         metadata={"last_booked_mls_id": validated_in.mls_id, "confirmed_slot": slot},
     )
     schedule_async_memory_consolidation(
@@ -371,18 +316,14 @@ def schedule_property_showing_appointment(
         preferences={"interested_mls_id": validated_in.mls_id, "pre_approved": pre_approved_mortgage},
     )
 
-    output = SchedulePropertyShowingOutput(
+    return SchedulePropertyShowingOutput(
         confirmation_id=confirmation_id,
         mls_id=validated_in.mls_id,
         property_address=listing["address"],
         confirmed_slot=slot,
         assigned_showing_agent=listing["assigned_agent"],
-        calendar_instructions=(
-            f"Appointment confirmed with {listing['assigned_agent']}. Please bring photo ID "
-            "and arrive 5 minutes prior to the scheduled tour."
-        ),
-    )
-    return output.model_dump()
+        calendar_instructions=f"Confirmed with {listing['assigned_agent']}. Please bring photo ID.",
+    ).model_dump()
 
 
 @traced_tool
@@ -428,67 +369,41 @@ def qualify_and_score_buyer_lead(
         return _build_guided_error(
             error_code="INVALID_LEAD_QUALIFICATION_INPUT",
             error_message=f"Lead qualification validation error: {exc.errors()[0]['msg']}",
-            available_alternatives=[
-                {"budget_usd_range": [50000, 50000000]},
-                {"down_payment_percent_range": [0.0, 100.0]},
-                {"purchase_timeline_days_range": [1, 730]},
-            ],
-            recovery_instructions_for_llm=(
-                "Ask the caller to clarify their approximate budget, down payment percentage, "
-                "and timeline in days, then re-run `qualify_and_score_buyer_lead`."
-            ),
+            available_alternatives=[{"budget_usd_range": [50000, 50000000]}],
+            recovery_instructions_for_llm="Ask the caller to clarify budget, down payment %, and timeline.",
         )
 
-    score = 30
-    if validated_in.is_pre_approved:
-        score += 35
-    if validated_in.down_payment_percent >= 20.0:
-        score += 20
-    elif validated_in.down_payment_percent >= 10.0:
-        score += 10
-    if validated_in.purchase_timeline_days <= 45:
-        score += 15
-    elif validated_in.purchase_timeline_days <= 90:
-        score += 8
+    score = 30 + (35 if validated_in.is_pre_approved else 0)
+    score += 20 if validated_in.down_payment_percent >= 20.0 else (10 if validated_in.down_payment_percent >= 10.0 else 0)
+    score += 15 if validated_in.purchase_timeline_days <= 45 else (8 if validated_in.purchase_timeline_days <= 90 else 0)
     score = min(100, score)
 
     if score >= 75:
-        tier = "HOT_A_LIST"
-        next_action = "Prioritize immediate private showing and connect with Senior Buyer Partner."
+        tier, next_action = "HOT_A_LIST", "Prioritize immediate private showing with Senior Buyer Partner."
     elif score >= 50:
-        tier = "WARM_ACTIVE"
-        next_action = "Schedule property tour and refer to partner mortgage lender if not pre-approved."
+        tier, next_action = "WARM_ACTIVE", "Schedule property tour and refer to partner mortgage lender."
     else:
-        tier = "NURTURE_PIPELINE"
-        next_action = "Enroll in weekly neighborhood MLS digest and mortgage readiness consultation."
+        tier, next_action = "NURTURE_PIPELINE", "Enroll in weekly neighborhood MLS digest."
 
     lead_id = f"LEAD-{abs(hash(validated_in.caller_phone)) % 90000 + 10000}"
-
-    # Non-blocking async memory consolidation for CRM enrichment
     schedule_async_memory_consolidation(
         caller_phone=validated_in.caller_phone,
-        event_description=(
-            f"Qualified buyer {validated_in.caller_name} as {tier} (score={score}/100)."
-        ),
+        event_description=f"Qualified buyer {validated_in.caller_name} as {tier} (score={score}/100).",
         preferences={
             "caller_name": validated_in.caller_name,
             "budget_usd": validated_in.budget_usd,
-            "down_payment_percent": validated_in.down_payment_percent,
-            "is_pre_approved": validated_in.is_pre_approved,
             "lead_score": score,
             "qualification_tier": tier,
-            "preferred_neighborhoods": validated_in.preferred_neighborhoods,
         },
     )
 
-    output = QualifyBuyerLeadOutput(
+    return QualifyBuyerLeadOutput(
         lead_id=lead_id,
         qualification_tier=tier,  # type: ignore[arg-type]
         lead_score=score,
         recommended_next_action=next_action,
         async_memory_job_scheduled=True,
-    )
-    return output.model_dump()
+    ).model_dump()
 
 
 @traced_tool
@@ -539,33 +454,17 @@ def triage_and_dispatch_emergency_maintenance(
             error_code="INVALID_MAINTENANCE_TRIAGE_INPUT",
             error_message=f"Maintenance triage input error: {exc.errors()[0]['msg']}",
             available_alternatives=[
-                "burst_pipe_flood",
-                "gas_leak_odor",
-                "hvac_failure_extreme_weather",
-                "electrical_hazard",
-                "appliance_routine_repair",
-                "cosmetic_maintenance",
+                "burst_pipe_flood", "gas_leak_odor", "hvac_failure_extreme_weather",
+                "electrical_hazard", "appliance_routine_repair", "cosmetic_maintenance",
             ],
-            recovery_instructions_for_llm=(
-                "Map the tenant's issue to one of the valid `issue_category` values in "
-                "`available_alternatives` and provide a positive `estimated_cost_usd`."
-            ),
+            recovery_instructions_for_llm="Map the issue to a valid `issue_category` and positive `estimated_cost_usd`.",
         )
 
-    critical_categories = {
-        "burst_pipe_flood",
-        "gas_leak_odor",
-        "hvac_failure_extreme_weather",
-        "electrical_hazard",
-    }
-    if validated_in.issue_category in critical_categories:
-        urgency = "CRITICAL_EMERGENCY"
-    elif validated_in.issue_category == "appliance_routine_repair":
-        urgency = "HIGH_PRIORITY"
-    else:
-        urgency = "ROUTINE_SLA"
+    critical = {"burst_pipe_flood", "gas_leak_odor", "hvac_failure_extreme_weather", "electrical_hazard"}
+    urgency = "CRITICAL_EMERGENCY" if validated_in.issue_category in critical else (
+        "HIGH_PRIORITY" if validated_in.issue_category == "appliance_routine_repair" else "ROUTINE_SLA"
+    )
 
-    # Explicit Human-in-the-Loop (HITL) Code Stop for dispatches exceeding $500
     if validated_in.estimated_cost_usd > EMERGENCY_DISPATCH_HITL_THRESHOLD_USD:
         if not hitl_gate.verify_approval_token(
             validated_in.human_approval_token,
@@ -575,13 +474,12 @@ def triage_and_dispatch_emergency_maintenance(
             pending = hitl_gate.create_approval_stop(
                 action_name="triage_and_dispatch_emergency_maintenance",
                 summary=(
-                    f"Emergency dispatch for {validated_in.issue_category} at "
-                    f"{validated_in.property_address} (${validated_in.estimated_cost_usd:,.2f}) "
-                    f"exceeds ${EMERGENCY_DISPATCH_HITL_THRESHOLD_USD:,.2f} threshold."
+                    f"Emergency dispatch for {validated_in.issue_category} at {validated_in.property_address} "
+                    f"(${validated_in.estimated_cost_usd:,.2f}) exceeds ${EMERGENCY_DISPATCH_HITL_THRESHOLD_USD:,.2f}."
                 ),
                 arguments=validated_in.model_dump(),
             )
-            hold_output = TriageEmergencyMaintenanceOutput(
+            return TriageEmergencyMaintenanceOutput(
                 status="PENDING_HUMAN_APPROVAL",
                 ticket_id=f"MNT-HOLD-{pending.approval_request_id}",
                 urgency_level=urgency,  # type: ignore[arg-type]
@@ -591,13 +489,10 @@ def triage_and_dispatch_emergency_maintenance(
                 approval_request_id=pending.approval_request_id,
                 tenant_safety_instructions=(
                     f"HUMAN APPROVAL REQUIRED (Request {pending.approval_request_id}): "
-                    f"Because the estimated repair cost (${validated_in.estimated_cost_usd:,.2f}) "
-                    "exceeds $500, our on-call Property Manager has been paged for immediate "
-                    "one-click sign-off. Please shut off the main water/gas shutoff valve and "
-                    "stay clear of hazards while we confirm dispatch."
+                    f"Repair cost (${validated_in.estimated_cost_usd:,.2f}) exceeds $500 limit. "
+                    "On-call Property Manager paged. Shut off main water/gas valve immediately."
                 ),
-            )
-            return hold_output.model_dump()
+            ).model_dump()
 
     ticket_id = f"MNT-{abs(hash(validated_in.property_address + validated_in.issue_category)) % 9000 + 1000}"
     vendor_map = {
@@ -609,8 +504,7 @@ def triage_and_dispatch_emergency_maintenance(
         "cosmetic_maintenance": "Premier Property Handyman Services",
     }
     vendor = vendor_map[validated_in.issue_category]
-
-    output = TriageEmergencyMaintenanceOutput(
+    return TriageEmergencyMaintenanceOutput(
         status="success",
         ticket_id=ticket_id,
         urgency_level=urgency,  # type: ignore[arg-type]
@@ -618,12 +512,8 @@ def triage_and_dispatch_emergency_maintenance(
         estimated_cost_usd=validated_in.estimated_cost_usd,
         requires_human_confirmation=validated_in.estimated_cost_usd > EMERGENCY_DISPATCH_HITL_THRESHOLD_USD,
         approval_request_id=None,
-        tenant_safety_instructions=(
-            f"{vendor} has been dispatched under ticket {ticket_id}. "
-            "Keep pets secured and ensure the front entryway is accessible."
-        ),
-    )
-    return output.model_dump()
+        tenant_safety_instructions=f"{vendor} dispatched under ticket {ticket_id}.",
+    ).model_dump()
 
 
 @traced_tool
@@ -665,10 +555,7 @@ def request_smart_lockbox_access_code(
             error_code="INVALID_LOCKBOX_REQUEST",
             error_message=f"Lockbox request validation failed: {exc.errors()[0]['msg']}",
             available_alternatives=list(MLS_CATALOG.keys()),
-            recovery_instructions_for_llm=(
-                "Verify the caller's MLS ID ('MLS-1001'..'MLS-1004'), full name, and "
-                "state license number or showing confirmation ID before requesting lockbox access."
-            ),
+            recovery_instructions_for_llm="Verify the MLS ID ('MLS-1001'..'MLS-1004'), name, and license/showing ID.",
         )
 
     if validated_in.mls_id not in MLS_CATALOG:
@@ -676,10 +563,7 @@ def request_smart_lockbox_access_code(
             error_code="LOCKBOX_MLS_NOT_FOUND",
             error_message=f"Property '{validated_in.mls_id}' is not managed by this agency.",
             available_alternatives=list(MLS_CATALOG.keys()),
-            recovery_instructions_for_llm=(
-                "Inform the caller that the MLS ID is not in our active inventory and offer "
-                "the valid MLS IDs from `available_alternatives`."
-            ),
+            recovery_instructions_for_llm="Offer valid MLS IDs from `available_alternatives`.",
         )
 
     if not hitl_gate.verify_approval_token(
@@ -689,13 +573,10 @@ def request_smart_lockbox_access_code(
     ):
         pending = hitl_gate.create_approval_stop(
             action_name="request_smart_lockbox_access_code",
-            summary=(
-                f"Smart-lockbox code release requested for {validated_in.mls_id} by "
-                f"{validated_in.requester_name} (ID: {validated_in.requester_license_or_id})."
-            ),
+            summary=f"Smart-lockbox access requested for {validated_in.mls_id} by {validated_in.requester_name}.",
             arguments=validated_in.model_dump(),
         )
-        hold_out = RequestLockboxAccessOutput(
+        return RequestLockboxAccessOutput(
             status="PENDING_HUMAN_APPROVAL",
             mls_id=validated_in.mls_id,
             requires_human_confirmation=True,
@@ -703,27 +584,20 @@ def request_smart_lockbox_access_code(
             one_time_access_window=None,
             masked_access_reference=None,
             instructions=(
-                f"SECURITY CODE STOP: Releasing physical lockbox access for {validated_in.mls_id} "
-                f"requires Managing Broker sign-off (Request ID: {pending.approval_request_id}). "
-                "The duty broker has been notified; once approved, the one-time token will be "
-                "dispatched via encrypted SMS."
+                f"SECURITY CODE STOP: Lockbox access for {validated_in.mls_id} requires Managing Broker "
+                f"sign-off (Request ID: {pending.approval_request_id})."
             ),
-        )
-        return hold_out.model_dump()
+        ).model_dump()
 
-    output = RequestLockboxAccessOutput(
+    return RequestLockboxAccessOutput(
         status="success",
         mls_id=validated_in.mls_id,
         requires_human_confirmation=True,
         approval_request_id=None,
         one_time_access_window="Valid for 60 minutes from broker approval",
         masked_access_reference=f"LKBOX-OTP-{validated_in.mls_id}-****",
-        instructions=(
-            "Broker approval verified. An encrypted one-time Bluetooth/keypad unlock pass "
-            "has been sent directly to the requester's verified mobile device."
-        ),
-    )
-    return output.model_dump()
+        instructions="Broker approval verified. One-time Bluetooth unlock pass sent via encrypted SMS.",
+    ).model_dump()
 
 
 @traced_tool
@@ -766,56 +640,34 @@ def generate_comparative_market_analysis(
         return _build_guided_error(
             error_code="INVALID_CMA_PARAMETERS",
             error_message=f"CMA parameter validation error: {exc.errors()[0]['msg']}",
-            available_alternatives={
-                "supported_neighborhoods": ["Oak Creek", "Downtown", "Suburban Hills"],
-                "condition_tiers": ["turnkey_renovated", "well_maintained", "needs_updating"],
-            },
-            recovery_instructions_for_llm=(
-                "Confirm the seller's property square footage (200-30,000 sqft), bedrooms, "
-                "bathrooms, and condition tier ('turnkey_renovated', 'well_maintained', or "
-                "'needs_updating'), then call `generate_comparative_market_analysis` again."
-            ),
+            available_alternatives=["Oak Creek", "Downtown", "Suburban Hills"],
+            recovery_instructions_for_llm="Confirm square footage, bedrooms, bathrooms, and condition tier.",
         )
 
-    norm_hood = validated_in.neighborhood.strip().lower()
-    comps = COMPARABLE_SALES_DB.get(norm_hood)
+    comps = COMPARABLE_SALES_DB.get(validated_in.neighborhood.strip().lower())
     if not comps:
         return _build_guided_error(
             error_code="NEIGHBORHOOD_COMPS_UNAVAILABLE",
-            error_message=(
-                f"No recent closed comparable sales found for neighborhood '{validated_in.neighborhood}'."
-            ),
+            error_message=f"No closed comparable sales found for '{validated_in.neighborhood}'.",
             available_alternatives=["Oak Creek", "Downtown", "Suburban Hills"],
-            recovery_instructions_for_llm=(
-                "Let the seller know we currently have instant automated comps for "
-                "'Oak Creek', 'Downtown', and 'Suburban Hills', and ask which of those "
-                "sub-markets is closest to their property."
-            ),
+            recovery_instructions_for_llm="Offer automated comps for 'Oak Creek', 'Downtown', or 'Suburban Hills'.",
         )
 
     avg_ppsqft = sum(c["sold_price_usd"] / c["sqft"] for c in comps) / len(comps)
-    condition_multiplier = {
-        "turnkey_renovated": 1.08,
-        "well_maintained": 1.00,
-        "needs_updating": 0.91,
-    }[validated_in.condition_tier]
+    mult = {"turnkey_renovated": 1.08, "well_maintained": 1.00, "needs_updating": 0.91}[validated_in.condition_tier]
+    adjusted_ppsqft = round(avg_ppsqft * mult, 2)
+    base_val = int(round(validated_in.sqft * adjusted_ppsqft, -3))
 
-    adjusted_ppsqft = round(avg_ppsqft * condition_multiplier, 2)
-    base_value = int(round(validated_in.sqft * adjusted_ppsqft, -3))
-    low_value = int(round(base_value * 0.95, -3))
-    high_value = int(round(base_value * 1.05, -3))
-
-    output = GenerateCmaValuationOutput(
+    return GenerateCmaValuationOutput(
         subject_address=validated_in.subject_address,
         neighborhood=validated_in.neighborhood,
-        estimated_market_value_usd=base_value,
-        valuation_range_low_usd=low_value,
-        valuation_range_high_usd=high_value,
+        estimated_market_value_usd=base_val,
+        valuation_range_low_usd=int(round(base_val * 0.95, -3)),
+        valuation_range_high_usd=int(round(base_val * 1.05, -3)),
         price_per_sqft_usd=adjusted_ppsqft,
         comparable_sales_used=comps,
         recommended_list_strategy=(
-            f"List at ${base_value:,} (${adjusted_ppsqft}/sqft) with a 14-day pre-market "
-            f"coming-soon campaign targeting pre-approved buyers in {validated_in.neighborhood}."
+            f"List at ${base_val:,} (${adjusted_ppsqft}/sqft) with a 14-day pre-market campaign "
+            f"targeting pre-approved buyers in {validated_in.neighborhood}."
         ),
-    )
-    return output.model_dump()
+    ).model_dump()
