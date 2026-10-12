@@ -36,6 +36,13 @@ try:
 except ImportError:
     firestore = None
 
+try:
+    from google.adk.apps.app import EventsCompactionConfig  # type: ignore
+    from google.adk.agents.context_cache_config import ContextCacheConfig  # type: ignore
+except ImportError:
+    EventsCompactionConfig = None  # type: ignore
+    ContextCacheConfig = None  # type: ignore
+
 
 # ---------------------------------------------------------------------------
 # 1. History Compaction (Token Truncation, Sliding Window, & Summarization)
@@ -153,7 +160,19 @@ class HistoryCompactor:
         return compacted, metrics
 
     def get_adk_compaction_config(self) -> Dict[str, Any]:
-        """Returns configuration dict compatible with ADK EventsCompactionConfig & Context Caching."""
+        """Returns configuration dict and ADK EventsCompactionConfig / ContextCacheConfig."""
+        adk_events_cfg = (
+            EventsCompactionConfig(
+                compaction_interval=self.compaction_Threshold_turns, overlap_size=2
+            )
+            if EventsCompactionConfig is not None
+            else None
+        )
+        adk_cache_cfg = (
+            ContextCacheConfig(min_tokens=1024, ttl_seconds=1800)
+            if ContextCacheConfig is not None
+            else None
+        )
         return {
             "compaction_interval": self.compaction_Threshold_turns,
             "overlap_size": 2,
@@ -161,6 +180,8 @@ class HistoryCompactor:
             "sliding_window_turns": self.sliding_window_turns,
             "vertex_context_caching_enabled": True,
             "cache_ttl_seconds": 1800,
+            "adk_events_compaction_config": adk_events_cfg,
+            "adk_context_cache_config": adk_cache_cfg,
         }
 
 
@@ -342,6 +363,23 @@ class PersistentCallerMemoryStore:
                 ),
             )
             conn.commit()
+
+        # Sync to Google Cloud Firestore when configured in production
+        if self._use_firestore and firestore is not None:
+            try:
+                fs_client = firestore.Client(project=os.environ.get("GOOGLE_CLOUD_PROJECT"))
+                fs_client.collection("caller_profiles").document(caller_key).set(
+                    {
+                        "caller_key": caller_key,
+                        "caller_name": clean_name,
+                        "interaction_summary": clean_summary,
+                        "preferences": merged_prefs,
+                        "updated_at": now_iso,
+                    },
+                    merge=True,
+                )
+            except Exception:
+                pass
 
         # Also index in semantic vector store for fast retrieval
         self.vector_index.upsert_document(

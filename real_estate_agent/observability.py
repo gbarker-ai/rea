@@ -46,6 +46,8 @@ class StructuredJsonFormatter(logging.Formatter):
     """Formats log records as single-line structured JSON objects for Cloud Logging."""
 
     def format(self, record: logging.LogRecord) -> str:
+        trace_id = getattr(record, "trace_id", get_current_trace_id())
+        span_id = getattr(record, "span_id", get_current_span_id())
         payload: Dict[str, Any] = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "severity": record.levelname,
@@ -56,8 +58,10 @@ class StructuredJsonFormatter(logging.Formatter):
             "session_id": getattr(record, "session_id", "default-session"),
             "agent_name": getattr(record, "agent_name", "front_desk_coordinator"),
             "correlation_id": getattr(record, "correlation_id", None),
-            "trace_id": getattr(record, "trace_id", get_current_trace_id()),
-            "span_id": getattr(record, "span_id", get_current_span_id()),
+            "trace_id": trace_id,
+            "span_id": span_id,
+            "logging.googleapis.com/trace": trace_id,
+            "logging.googleapis.com/spanId": span_id,
         }
         if hasattr(record, "structured_payload"):
             payload["payload"] = pii_redactor.scrub_payload(
